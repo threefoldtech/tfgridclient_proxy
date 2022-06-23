@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+
 	"github.com/threefoldtech/grid_proxy_server/internal/explorer"
 	"github.com/threefoldtech/grid_proxy_server/internal/explorer/db"
 	"github.com/threefoldtech/grid_proxy_server/internal/rmbproxy"
@@ -55,7 +58,7 @@ func main() {
 	flag.StringVar(&f.postgresDB, "postgres-db", "", "postgres database")
 	flag.StringVar(&f.postgresUser, "postgres-user", "", "postgres username")
 	flag.StringVar(&f.postgresPassword, "postgres-password", "", "postgres password")
-	flag.StringVar(&f.redis, "redis", "tcp://127.0.0.1:6379", "redis url")
+	flag.StringVar(&f.redis, "redis", "127.0.0.1:6379", "redis url")
 	flag.BoolVar(&f.version, "v", false, "shows the package version")
 	flag.StringVar(&f.certCacheDir, "cert-cache-dir", CertDefaultCacheDir, "path to store generated certs in")
 	flag.BoolVar(&f.nocert, "no-cert", false, "start the server without certificate")
@@ -141,12 +144,20 @@ func createServer(f flags, gitCommit string) (*http.Server, error) {
 	}
 
 	// setup explorer
-	if err := explorer.Setup(router, f.redis, gitCommit, db); err != nil {
+	if err := explorer.Setup(router, gitCommit, db); err != nil {
 		return nil, err
 	}
-	if err := rmbproxy.Setup(router, f.substrate); err != nil {
+
+	// setup rmb proxy
+	redis := redis.NewClient(&redis.Options{
+		Addr: f.redis,
+	})
+	ttl := 10 * time.Minute
+	proxy, err := rmbproxy.NewProxy(f.substrate, redis, ttl)
+	if err != nil {
 		return nil, err
 	}
+	proxy.Setup(router)
 
 	return &http.Server{
 		Handler: router,
